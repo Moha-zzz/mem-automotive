@@ -38,9 +38,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
       </head>
-      <body>
-        <Navigation />
-        {children}
+      <body style={{ display: 'flex', minHeight: '100vh', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+          <Navigation />
+          <main style={{ flex: 1, minWidth: 0, overflowX: 'hidden' }}>
+            {children}
+          </main>
+        </div>
       </body>
     </html>
   );
