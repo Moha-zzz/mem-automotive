@@ -1,12 +1,12 @@
 import { createClient } from '@/lib/supabase/server';
 import StatistiquesClient from './StatistiquesClient';
-
+export const dynamic = 'force-dynamic';
 export default async function StatistiquesPage() {
   const sb = await createClient();
-  const [{ data: cars }, { data: expenses }, { data: invoices }] = await Promise.all([
-    sb.from('cars').select('id,name,stage,buy_price_cts,sell_price_cts,buy_date,sell_date,bought_at,sold_at,regime'),
+  const [{ data: cars }, { data: expenses }, { data: settings }] = await Promise.all([
+    sb.from('cars').select('*'),
     sb.from('expenses').select('*'),
-    sb.from('invoices').select('*'),
+    sb.from('settings').select('tva,cible,mini').eq('id', 'main').single(),
   ]);
-  return <StatistiquesClient cars={cars ?? []} expenses={expenses ?? []} invoices={invoices ?? []} />;
+  return <StatistiquesClient cars={cars ?? []} expenses={expenses ?? []} settings={settings ?? {}} />;
 }

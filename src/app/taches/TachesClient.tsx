@@ -1,230 +1,242 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { fmtDateLong, today, addDays } from '@/lib/fmt';
+import { Plus, Check, X, ChevronDown, ChevronUp, Lock } from 'lucide-react';
 
-function uid() {
-  return `task_${Date.now()}`;
-}
+const PRIO = { 1: 'Urgent', 2: 'Normal', 3: 'Pas pressé' };
+const PRIO_COLOR = { 1: 'var(--red)', 2: 'var(--amber)', 3: 'var(--green)' };
 
-const PRIORITIES = [
-  { value: 1, label: '🔴 Urgent', color: 'bg-red-100 text-red-700' },
-  { value: 2, label: '🟠 Haut', color: 'bg-orange-100 text-orange-700' },
-  { value: 3, label: '🟡 Normal', color: 'bg-yellow-100 text-yellow-700' },
-  { value: 4, label: '🟢 Bas', color: 'bg-green-100 text-green-700' },
-];
+interface Props { initialTasks: any[]; launch: any[]; cars: any[]; }
 
-interface Props {
-  tasks: any[];
-  cars: any[];
-}
+export default function TachesClient({ initialTasks, launch: initLaunch, cars }: Props) {
+  const sb = createClient();
+  const [tasks, setTasks] = useState(initialTasks);
+  const [launch, setLaunch] = useState(initLaunch);
+  const [showDone, setShowDone] = useState(false);
+  const [showLaunch, setShowLaunch] = useState(true);
+  const [form, setForm] = useState({ title: '', prio: '2', due: today(), car_id: '' });
 
-export default function TachesClient({ tasks: initTasks, cars }: Props) {
-  const supabase = createClient();
-  const [tasks, setTasks] = useState(initTasks);
-  const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'done'>('all');
-  const [filterPriority, setFilterPriority] = useState(0); // 0 = all
-  const [newTaskText, setNewTaskText] = useState('');
-  const [newTaskPriority, setNewTaskPriority] = useState(3);
-  const [newTaskDue, setNewTaskDue] = useState('');
+  const t = today();
 
-  const filtered = useMemo(() => {
-    return tasks.filter(t => {
-      if (filterStatus === 'pending' && t.done) return false;
-      if (filterStatus === 'done' && !t.done) return false;
-      if (filterPriority > 0 && t.priority !== filterPriority) return false;
-      return true;
-    });
-  }, [tasks, filterStatus, filterPriority]);
+  const open = tasks.filter(x => !x.done);
+  const done = tasks.filter(x => x.done).sort((a, b) => (b.done_at ?? '').localeCompare(a.done_at ?? ''));
 
-  const stats = useMemo(() => ({
-    total: tasks.length,
-    done: tasks.filter(t => t.done).length,
-    pending: tasks.filter(t => !t.done).length,
-  }), [tasks]);
+  const late    = open.filter(x => x.due && x.due < t);
+  const todayTs = open.filter(x => x.due === t);
+  const upcoming = open.filter(x => x.due && x.due > t).sort((a, b) => a.due.localeCompare(b.due));
+  const nodate  = open.filter(x => !x.due);
 
-  async function toggleTask(id: string, done: boolean) {
-    await supabase.from('tasks').update({ done }).eq('id', id);
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, done } : t));
-  }
+  const addTask = async () => {
+    if (!form.title.trim()) return;
+    const payload: any = { title: form.title, prio: parseInt(form.prio), due: form.due || null, done: false };
+    if (form.car_id) payload.car_id = form.car_id;
+    const { data } = await sb.from('tasks').insert(payload).select().single();
+    if (data) { setTasks(prev => [data, ...prev]); setForm(p => ({ ...p, title: '' })); }
+  };
 
-  async function deleteTask(id: string) {
-    await supabase.from('tasks').delete().eq('id', id);
+  const toggle = async (id: string, done: boolean) => {
+    await sb.from('tasks').update({ done: !done, done_at: !done ? new Date().toISOString() : null }).eq('id', id);
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, done: !t.done, done_at: !done ? new Date().toISOString() : null } : t));
+  };
+
+  const del = async (id: string) => {
+    await sb.from('tasks').delete().eq('id', id);
     setTasks(prev => prev.filter(t => t.id !== id));
-  }
+  };
 
-  async function addTask() {
-    if (!newTaskText.trim()) return;
-    const id = uid();
-    const now = new Date().toISOString();
-    const task = {
-      id,
-      text: newTaskText,
-      priority: newTaskPriority,
-      due_date: newTaskDue || null,
-      done: false,
-      created_at: now,
+  const Group = ({ title, items, color }: { title: string; items: any[]; color?: string }) => {
+    if (items.length === 0) return null;
+    return (
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: color ?? 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
+          {title} <span style={{ opacity: 0.7 }}>({items.length})</span>
+        </div>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+          {items.map(task => {
+            const car = task.car_id ? cars.find(c => c.id === task.car_id) : null;
+            const isLate = task.due && task.due < t && !task.done;
+            return (
+              <div key={task.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--border)', opacity: task.done ? 0.6 : 1 }}>
+                <button onClick={() => toggle(task.id, task.done)} style={{
+                  width: 20, height: 20, borderRadius: 5, border: `2px solid ${task.done ? 'var(--green)' : 'var(--border)'}`,
+                  background: task.done ? 'var(--green)' : 'transparent', display: 'grid', placeItems: 'center', flexShrink: 0, cursor: 'pointer',
+                }}>
+                  {task.done && <Check size={11} style={{ color: '#fff' }} />}
+                </button>
+                <div style={{ width: 7, height: 7, borderRadius: '50%', background: PRIO_COLOR[task.prio as keyof typeof PRIO_COLOR] ?? 'var(--amber)', flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, textDecoration: task.done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.title}</div>
+                  {car && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{car.name}</div>}
+                </div>
+                {task.due && (
+                  <span style={{ fontSize: 11, flexShrink: 0, padding: '2px 7px', borderRadius: 4, background: isLate ? 'var(--red-soft)' : task.due === t ? 'var(--amber-soft)' : 'var(--surface-2)', color: isLate ? 'var(--red)' : task.due === t ? 'var(--amber)' : 'var(--text-muted)' }}>
+                    {isLate ? 'En retard · ' : ''}{fmtDateLong(task.due)}
+                  </span>
+                )}
+                <button onClick={() => del(task.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 2 }}>
+                  <X size={13} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  // Launch plan computation
+  const launchPlan = useMemo(() => {
+    if (!launch.length) return null;
+    const steps = [...launch].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const by: Record<string, any> = {};
+    steps.forEach(x => by[x.id] = x);
+    const memo: Record<string, any> = {};
+
+    const calc = (x: any, guard = 0): any => {
+      if (memo[x.id]) return memo[x.id];
+      if (guard > 40) return memo[x.id] = { lo: t, hi: t };
+      if (x.done) return memo[x.id] = { lo: x.done_date ?? t, hi: x.done_date ?? t, done: true };
+      const pre = (x.prereq ?? []).map((id: string) => by[id]).filter(Boolean);
+      const pr  = pre.map((p: any) => calc(p, guard + 1));
+      let sLo = pr.reduce((m: string, r: any) => r.lo > m ? r.lo : m, '');
+      let sHi = pr.reduce((m: string, r: any) => r.hi > m ? r.hi : m, '');
+      if (!sLo) sLo = x.start_date ?? t;
+      if (!sHi) sHi = x.start_date ?? t;
+      const lo = addDays(sLo, x.dmin ?? 0);
+      const hi = addDays(sHi, x.dmax ?? 0);
+      return memo[x.id] = { lo: lo < t ? t : lo, hi: hi < lo ? lo : hi, done: false, open: pre.every((p: any) => p.done) };
     };
-    await supabase.from('tasks').insert([task]);
-    setTasks(prev => [...prev, task]);
-    setNewTaskText('');
-    setNewTaskDue('');
-    setNewTaskPriority(3);
-  }
 
-  const overdueTasks = filtered.filter(t =>
-    !t.done && t.due_date && new Date(t.due_date) < new Date()
-  ).length;
+    steps.forEach(x => calc(x));
+    const doneCnt = steps.filter(x => x.done).length;
+    const ms = steps.find(x => x.milestone) ?? steps[steps.length - 1];
+    const next = steps.find(x => !x.done && memo[x.id]?.open);
+    return { steps, r: memo, doneCnt, total: steps.length, end: ms ? memo[ms.id] : null, next };
+  }, [launch, t]);
+
+  const validateLaunch = async (id: string) => {
+    await sb.from('launch').update({ done: true, done_date: t }).eq('id', id);
+    setLaunch(prev => prev.map(x => x.id === id ? { ...x, done: true, done_date: t } : x));
+    toast.success('Étape validée');
+  };
+
+  const inpStyle: React.CSSProperties = { width: '100%', height: 32, padding: '0 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 13 };
 
   return (
-    <div className="min-h-screen bg-slate-50">
-
+    <div style={{ padding: '24px clamp(16px,3vw,40px) 60px', maxWidth: 900, margin: '0 auto' }}>
       {/* Header */}
-      <div className="bg-white border-b border-slate-100 sticky top-0 z-10 px-4 py-3">
-        <div className="max-w-2xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-bold text-slate-800">✅ Tâches</h1>
-            <p className="text-xs text-slate-400">
-              {stats.done}/{stats.total} complétées
-              {overdueTasks > 0 && <span className="text-red-500 ml-2">⚠️ {overdueTasks} retard</span>}
-            </p>
-          </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20 }}>
+        <div>
+          <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.02em' }}>Tâches</h1>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '3px 0 0' }}>{open.length} à faire</p>
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-4 py-4 space-y-4">
+      {/* Add form */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+        <input style={{ ...inpStyle, flex: 2, minWidth: 200 }} placeholder="Nouvelle tâche…" value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} onKeyDown={e => e.key === 'Enter' && addTask()} />
+        <select style={{ ...inpStyle, width: 140 } as any} value={form.prio} onChange={e => setForm(p => ({ ...p, prio: e.target.value }))}>
+          <option value="1">🔴 Urgent</option>
+          <option value="2">🟠 Normal</option>
+          <option value="3">🟢 Pas pressé</option>
+        </select>
+        <input style={{ ...inpStyle, width: 140 } as any} type="date" value={form.due} onChange={e => setForm(p => ({ ...p, due: e.target.value }))} />
+        <select style={{ ...inpStyle, width: 160 } as any} value={form.car_id} onChange={e => setForm(p => ({ ...p, car_id: e.target.value }))}>
+          <option value="">Aucune voiture</option>
+          {cars.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <Button size="sm" onClick={addTask} disabled={!form.title.trim()}><Plus size={13} /> Ajouter</Button>
+      </div>
 
-        {/* Nouvelle tâche */}
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
-          <h2 className="text-sm font-semibold text-slate-700 mb-3">Nouvelle tâche</h2>
-          <div className="space-y-3">
+      {/* Launch checklist */}
+      {launchPlan && (
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ background: 'var(--navy)', borderRadius: 12, padding: '16px 20px', marginBottom: 12, display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems: 'center' }}>
             <div>
-              <input
-                type="text"
-                value={newTaskText}
-                onChange={e => setNewTaskText(e.target.value)}
-                onKeyPress={e => e.key === 'Enter' && addTask()}
-                placeholder="Saisir une tâche…"
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-xs text-slate-500 mb-1 block">Priorité</label>
-                <select value={newTaskPriority} onChange={e => setNewTaskPriority(Number(e.target.value))}
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200">
-                  {PRIORITIES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-                </select>
+              <div style={{ fontSize: 11, color: '#AEB9D6', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Démarrage · {launchPlan.doneCnt}/{launchPlan.total} étapes</div>
+              <div style={{ fontFamily: 'var(--font-barlow-cond)', fontSize: 20, fontWeight: 700, color: '#fff' }}>
+                {launchPlan.end ? (launchPlan.end.lo === launchPlan.end.hi ? `Lancement prévu le ${fmtDateLong(launchPlan.end.lo)}` : `Lancement entre le ${fmtDateLong(launchPlan.end.lo)} et le ${fmtDateLong(launchPlan.end.hi)}`) : 'Checklist de démarrage'}
               </div>
-              <div>
-                <label className="text-xs text-slate-500 mb-1 block">Échéance</label>
-                <input type="date" value={newTaskDue} onChange={e => setNewTaskDue(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200" />
+              <div style={{ height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden', marginTop: 10 }}>
+                <div style={{ height: '100%', background: '#F59E0B', borderRadius: 2, width: `${(launchPlan.doneCnt / launchPlan.total * 100).toFixed(0)}%` }} />
               </div>
             </div>
-            <button onClick={addTask}
-              className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
-              + Ajouter
-            </button>
+            {launchPlan.next && (
+              <div style={{ textAlign: 'right', color: '#AEB9D6', fontSize: 12 }}>
+                <div>Prochaine étape</div>
+                <div style={{ fontFamily: 'var(--font-barlow-cond)', fontSize: 15, fontWeight: 700, color: '#fff' }}>{launchPlan.next.title}</div>
+              </div>
+            )}
           </div>
-        </div>
 
-        {/* Filtres */}
-        <div className="flex gap-2 flex-wrap">
-          {(['all', 'pending', 'done'] as const).map(s => (
-            <button key={s} onClick={() => setFilterStatus(s)}
-              className={['px-3 py-1.5 rounded-full text-xs font-medium transition-colors',
-                filterStatus === s ? 'bg-slate-700 text-white' : 'bg-white border border-slate-200 text-slate-600'].join(' ')}>
-              {s === 'all' ? 'Toutes' : s === 'pending' ? 'En attente' : 'Faites'}
-            </button>
-          ))}
-          <div className="w-px bg-slate-200" />
-          {PRIORITIES.map(p => (
-            <button key={p.value} onClick={() => setFilterPriority(filterPriority === p.value ? 0 : p.value)}
-              className={['px-3 py-1.5 rounded-full text-xs font-medium transition-colors',
-                filterPriority === p.value ? `${p.color}` : 'bg-white border border-slate-200 text-slate-600'].join(' ')}>
-              {p.label}
-            </button>
-          ))}
-        </div>
+          <button onClick={() => setShowLaunch(s => !s)} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+            {showLaunch ? <ChevronUp size={14} /> : <ChevronDown size={14} />} {showLaunch ? 'Masquer' : 'Voir'} les étapes
+          </button>
 
-        {/* Liste tâches */}
-        {filtered.length === 0 ? (
-          <div className="text-center py-12 text-slate-400">
-            <p className="text-3xl mb-2">🎉</p>
-            <p>{filterStatus === 'done' ? 'Aucune tâche complétée' : 'Aucune tâche en attente'}</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {filtered.map(task => {
-              const isOverdue = !task.done && task.due_date && new Date(task.due_date) < new Date();
-              const prioLabel = PRIORITIES.find(p => p.value === task.priority);
+          {showLaunch && (
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+              {launchPlan.steps.map((step: any, i: number) => {
+                const r = launchPlan.r[step.id];
+                const st = step.done ? 'done' : r.open ? 'open' : 'locked';
+                const pre = (step.prereq ?? []).map((id: string) => launchPlan.steps.find((y: any) => y.id === id)).filter((y: any) => y && !y.done);
 
-              return (
-                <div key={task.id}
-                  className={`rounded-lg p-3 border transition-opacity ${
-                    task.done ? 'bg-slate-50 border-slate-100 opacity-60' : 'bg-white border-slate-100'
-                  }`}>
-                  <div className="flex items-start gap-3">
-                    {/* Checkbox */}
-                    <input
-                      type="checkbox"
-                      checked={task.done}
-                      onChange={e => toggleTask(task.id, e.target.checked)}
-                      className="mt-1 w-5 h-5 rounded cursor-pointer accent-blue-600"
-                    />
-
-                    {/* Contenu */}
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-sm ${task.done ? 'line-through text-slate-400' : 'text-slate-800'}`}>
-                        {task.text}
-                      </p>
-                      <div className="flex items-center gap-2 mt-2 flex-wrap">
-                        {prioLabel && (
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${prioLabel.color}`}>
-                            {prioLabel.label}
-                          </span>
-                        )}
-                        {task.due_date && (
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${
-                            isOverdue ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-600'
-                          }`}>
-                            {new Date(task.due_date).toLocaleDateString('fr-FR', {
-                              day: 'numeric',
-                              month: 'short',
-                            })}
-                            {isOverdue && ' ⚠️'}
-                          </span>
-                        )}
-                        {task.car_id && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-600">
-                            {cars.find(c => c.id === task.car_id)?.name || 'Voiture'}
-                          </span>
+                return (
+                  <div key={step.id} style={{ display: 'grid', gridTemplateColumns: '28px 1fr auto', gap: 12, padding: '12px 14px', borderBottom: '1px solid var(--border)', opacity: st === 'locked' ? 0.5 : 1 }}>
+                    <div style={{ width: 28, height: 28, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0, background: st === 'done' ? 'var(--green)' : st === 'open' ? 'var(--amber)' : 'var(--surface-2)', color: st === 'done' ? '#fff' : st === 'open' ? '#1a1a1a' : 'var(--text-muted)', fontSize: 12, fontWeight: 700 }}>
+                      {st === 'done' ? <Check size={13} /> : st === 'locked' ? <Lock size={11} /> : i + 1}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>
+                        {step.title}
+                        {step.milestone && <span style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 4, background: 'var(--amber-soft)', color: 'var(--amber)', fontSize: 11 }}>Objectif</span>}
+                      </div>
+                      {step.detail && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{step.detail}</div>}
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                        {step.done ? (
+                          <span style={{ fontSize: 11, background: 'var(--green-soft)', color: 'var(--green)', padding: '1px 7px', borderRadius: 4 }}>Fait le {fmtDateLong(step.done_date)}</span>
+                        ) : (
+                          <>
+                            {r && <span style={{ fontSize: 11, background: 'var(--surface-2)', color: 'var(--text-muted)', padding: '1px 7px', borderRadius: 4 }}>Prévu {r.lo === r.hi ? 'le' : 'entre'} {fmtDateLong(r.lo)}{r.lo !== r.hi ? ` et le ${fmtDateLong(r.hi)}` : ''}</span>}
+                            {pre.length > 0 && <span style={{ fontSize: 11, background: 'var(--surface-2)', color: 'var(--text-muted)', padding: '1px 7px', borderRadius: 4 }}>Après : {pre.map((p: any) => p.title).join(', ')}</span>}
+                          </>
                         )}
                       </div>
                     </div>
-
-                    {/* Supprimer */}
-                    <button onClick={() => deleteTask(task.id)}
-                      className="text-slate-300 hover:text-red-400 p-1 flex-shrink-0">
-                      ✕
-                    </button>
+                    {st === 'open' && !step.done && (
+                      <Button size="sm" onClick={() => validateLaunch(step.id)}>Valider</Button>
+                    )}
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
-        {/* Résumé */}
-        {filtered.length > 0 && (
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-800">
-            <p>
-              <span className="font-semibold">{filtered.filter(t => t.done).length}</span>/{filtered.length} tâche{filtered.length > 1 ? 's' : ''} complétée{filtered.filter(t => t.done).length > 1 ? 's' : ''}
-            </p>
-          </div>
-        )}
-      </div>
+      {/* Task groups */}
+      {open.length === 0 && (
+        <div style={{ padding: '32px', textAlign: 'center', border: '1px dashed var(--border)', borderRadius: 12, color: 'var(--text-muted)', fontSize: 13 }}>
+          Tout est fait ! Ajoute une tâche ci-dessus.
+        </div>
+      )}
+      <Group title="En retard" items={late} color="var(--red)" />
+      <Group title="Aujourd'hui" items={todayTs} color="var(--amber)" />
+      <Group title="À venir" items={upcoming} />
+      <Group title="Sans date" items={nodate} />
+
+      {done.length > 0 && (
+        <div>
+          <button onClick={() => setShowDone(d => !d)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+            {showDone ? <ChevronUp size={14} /> : <ChevronDown size={14} />} Tâches faites ({done.length})
+          </button>
+          {showDone && <Group title="" items={done.slice(0, 50)} />}
+        </div>
+      )}
     </div>
   );
 }

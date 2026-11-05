@@ -1,222 +1,113 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { fromCents } from '@/lib/calculations';
-import { exportToPDF, exportToCSV } from '@/lib/police/export';
+import { useMemo } from 'react';
+import { Button } from '@/components/ui/button';
+import { Download, FileText } from 'lucide-react';
+import { fmtDateLong } from '@/lib/fmt';
+import { fromCts } from '@/lib/car-calc';
 
-function eur(cts: number | null | undefined) {
-  if (!cts) return '—';
-  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(fromCents(cts));
-}
+const eur = (n: number) => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(n);
 
-function date(d: string | null | undefined) {
-  if (!d) return '—';
-  return new Date(d).toLocaleDateString('fr-FR', { year: 'numeric', month: 'long', day: 'numeric' });
-}
+interface Props { cars: any[]; contacts: any[]; }
 
-interface Props {
-  logs: any[];
-  cars: any[];
-  settings: any;
-}
+export default function PoliceClient({ cars, contacts }: Props) {
+  const ctById = (id: string) => contacts.find(c => c.id === id) ?? {};
 
-export default function PoliceClient({ logs: initLogs, cars, settings }: Props) {
-  const [logs] = useState(initLogs);
-  const [filterType,     setFilterType]     = useState<'all' | 'achat' | 'vente'>('all');
-  const [filterRegime,   setFilterRegime]   = useState<'all' | 'marge' | 'normal'>('all');
-  const [startDate,      setStartDate]      = useState('');
-  const [endDate,        setEndDate]        = useState('');
+  const rows = useMemo(() =>
+    cars.filter(c => c.buy_date && c.stage !== 'abandon')
+      .sort((a, b) => (a.buy_date ?? '').localeCompare(b.buy_date ?? ''))
+      .map((c, i) => {
+        const seller = ctById(c.seller_id);
+        const buyer  = ctById(c.buyer_id);
+        return {
+          n: i + 1, id: c.id,
+          buyDate: fmtDateLong(c.buy_date),
+          name: c.name, plate: c.plate ?? '', vin: c.vin ?? '',
+          seller: seller.name ?? '', sellerAddr: seller.address ?? '', sellerId: seller.id_doc ?? '',
+          buyPrice: c.buy_price_cts ? eur(fromCts(c.buy_price_cts)) : '—',
+          buyPay: c.buy_pay ?? '',
+          sellDate: c.sell_date ? fmtDateLong(c.sell_date) : '',
+          buyer: buyer.name ?? '', buyerAddr: buyer.address ?? '',
+          sellPrice: c.sell_price_cts ? eur(fromCts(c.sell_price_cts)) : '',
+          sellPay: c.sell_pay ?? '',
+        };
+      }), [cars, contacts]);
 
-  const filtered = useMemo(() => {
-    return logs.filter(log => {
-      if (filterType !== 'all' && log.kind !== filterType) return false;
-      if (filterRegime !== 'all' && log.regime !== filterRegime) return false;
-      if (startDate && (log.created_at ?? '') < startDate) return false;
-      if (endDate && (log.created_at ?? '') > endDate + 'T23:59:59Z') return false;
-      return true;
-    });
-  }, [logs, filterType, filterRegime, startDate, endDate]);
+  const exportCSV = () => {
+    const headers = ['N°','Date achat','Véhicule','Immat.','VIN','Vendeur','Adresse vendeur','Pièce identité','Prix achat','Paiement','Date vente','Acheteur','Adresse acheteur','Prix vente','Paiement vente'];
+    const csvRows = rows.map(r => [r.n,r.buyDate,r.name,r.plate,r.vin,r.seller,r.sellerAddr,r.sellerId,r.buyPrice,r.buyPay,r.sellDate,r.buyer,r.buyerAddr,r.sellPrice,r.sellPay].join(';'));
+    const csv = [headers.join(';'), ...csvRows].join('\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
+    a.download = `livre_police_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+  };
 
-  const totals = useMemo(() => {
-    const buys = filtered.filter(l => l.kind === 'achat').reduce((s, l) => s + (l.amount_cts ?? 0), 0);
-    const sells = filtered.filter(l => l.kind === 'vente').reduce((s, l) => s + (l.amount_cts ?? 0), 0);
-    return { buys: fromCents(buys), sells: fromCents(sells), net: fromCents(sells - buys) };
-  }, [filtered]);
-
-  async function handleExportPDF() {
-    await exportToPDF(filtered, cars, settings);
-  }
-
-  async function handleExportCSV() {
-    await exportToCSV(filtered, cars);
-  }
+  const cols = [
+    { key: 'n', label: 'N°', w: 40 },
+    { key: 'buyDate', label: 'Date achat', w: 90 },
+    { key: 'name', label: 'Véhicule', w: 160 },
+    { key: 'plate', label: 'Immat.', w: 90 },
+    { key: 'seller', label: 'Acheté à', w: 120 },
+    { key: 'sellerId', label: 'Pièce identité', w: 120 },
+    { key: 'buyPrice', label: "Prix d'achat", w: 90 },
+    { key: 'buyPay', label: 'Paiement', w: 80 },
+    { key: 'sellDate', label: 'Date vente', w: 90 },
+    { key: 'buyer', label: 'Revendu à', w: 120 },
+    { key: 'sellPrice', label: 'Prix vente', w: 90 },
+  ];
 
   return (
-    <div className="min-h-screen bg-slate-50">
-
-      {/* Header */}
-      <div className="bg-white border-b border-slate-100 sticky top-0 z-10 px-4 py-3">
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-bold text-slate-800">📋 Livre de police</h1>
-            <p className="text-xs text-slate-400">Journal légal append-only (immuable)</p>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={handleExportPDF}
-              className="text-xs bg-red-600 text-white px-3 py-2 rounded-lg hover:bg-red-700">
-              📄 PDF
-            </button>
-            <button onClick={handleExportCSV}
-              className="text-xs bg-green-600 text-white px-3 py-2 rounded-lg hover:bg-green-700">
-              📊 Excel
-            </button>
-          </div>
+    <div style={{ padding: '24px clamp(16px,3vw,40px) 60px', maxWidth: 1300, margin: '0 auto' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20 }}>
+        <div>
+          <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.02em' }}>Livre de police</h1>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '3px 0 0' }}>
+            {rows.length} entrée{rows.length > 1 ? 's' : ''} · Registre immuable 🔒
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button variant="secondary" size="sm" onClick={exportCSV}><Download size={13} /> CSV</Button>
         </div>
       </div>
 
-      <div className="max-w-3xl mx-auto px-4 py-4 space-y-4">
-
-        {/* Résumé */}
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
-            <p className="text-xs text-slate-400 mb-1">Achats</p>
-            <p className="text-2xl font-bold text-slate-800">{eur(Math.round(totals.buys * 100))}</p>
-            <p className="text-xs text-slate-400 mt-1">{filtered.filter(l => l.kind === 'achat').length} transactions</p>
-          </div>
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
-            <p className="text-xs text-slate-400 mb-1">Ventes</p>
-            <p className="text-2xl font-bold text-slate-800">{eur(Math.round(totals.sells * 100))}</p>
-            <p className="text-xs text-slate-400 mt-1">{filtered.filter(l => l.kind === 'vente').length} transactions</p>
-          </div>
-          <div className={`bg-white rounded-xl p-4 shadow-sm border ${totals.net >= 0 ? 'border-green-200' : 'border-red-200'}`}>
-            <p className="text-xs text-slate-400 mb-1">Net</p>
-            <p className={`text-2xl font-bold ${totals.net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              {eur(Math.round(totals.net * 100))}
-            </p>
-          </div>
+      {rows.length === 0 ? (
+        <div style={{ padding: '48px', textAlign: 'center', border: '1px dashed var(--border)', borderRadius: 12, color: 'var(--text-muted)', fontSize: 13 }}>
+          Aucune voiture avec une date d'achat. Le livre de police se remplira automatiquement.
         </div>
-
-        {/* Filtres */}
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100 space-y-3">
-          <div className="flex gap-2 flex-wrap">
-            {(['all', 'achat', 'vente'] as const).map(t => (
-              <button key={t} onClick={() => setFilterType(t)}
-                className={['px-3 py-1.5 rounded-full text-xs font-medium transition-colors',
-                  filterType === t ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600'].join(' ')}>
-                {t === 'all' ? 'Tout' : t === 'achat' ? 'Achats' : 'Ventes'}
-              </button>
-            ))}
-            <div className="w-px bg-slate-200" />
-            {(['all', 'marge', 'normal'] as const).map(r => (
-              <button key={r} onClick={() => setFilterRegime(r)}
-                className={['px-3 py-1.5 rounded-full text-xs font-medium transition-colors',
-                  filterRegime === r ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'].join(' ')}>
-                {r === 'all' ? 'Tous régimes' : r === 'marge' ? 'TVA Marge' : 'TVA Normal'}
-              </button>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">Depuis</label>
-              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">Jusqu'au</label>
-              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200" />
-            </div>
-          </div>
-        </div>
-
-        {/* Tableau */}
-        {filtered.length === 0 ? (
-          <div className="text-center py-12 text-slate-400">
-            <p className="text-3xl mb-2">📋</p>
-            <p>Aucune transaction dans cette période</p>
-          </div>
-        ) : (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 border-b border-slate-200">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-slate-600 font-semibold">Date</th>
-                    <th className="px-4 py-3 text-left text-slate-600 font-semibold">Type</th>
-                    <th className="px-4 py-3 text-left text-slate-600 font-semibold">Véhicule</th>
-                    <th className="px-4 py-3 text-left text-slate-600 font-semibold">Régime</th>
-                    <th className="px-4 py-3 text-right text-slate-600 font-semibold">Montant</th>
-                    <th className="px-4 py-3 text-left text-slate-600 font-semibold">Status</th>
+      ) : (
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ borderCollapse: 'collapse', fontSize: 12.5, minWidth: 900 }}>
+              <thead>
+                <tr style={{ background: 'var(--surface-2)' }}>
+                  {cols.map(c => (
+                    <th key={c.key} style={{ padding: '9px 12px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap', minWidth: c.w }}>
+                      {c.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => (
+                  <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
+                    {cols.map(c => (
+                      <td key={c.key} style={{ padding: '9px 12px', whiteSpace: 'nowrap', maxWidth: c.w, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {c.key === 'n' ? <span style={{ fontFamily: 'var(--font-barlow-cond)', fontWeight: 700 }}>{(r as any)[c.key]}</span> : (r as any)[c.key] || <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                      </td>
+                    ))}
                   </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((log, i) => {
-                    const car = cars.find(c => c.id === log.car_id);
-                    const amount = fromCents(log.amount_cts ?? 0);
-                    return (
-                      <tr key={i} className="border-b border-slate-100 hover:bg-slate-50 last:border-0">
-                        <td className="px-4 py-3 text-slate-700 font-mono text-xs">
-                          {new Date(log.created_at).toLocaleDateString('fr-FR')} <br />
-                          <span className="text-slate-400">{new Date(log.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                            log.kind === 'achat'
-                              ? 'bg-orange-100 text-orange-700'
-                              : 'bg-green-100 text-green-700'
-                          }`}>
-                            {log.kind === 'achat' ? '📥 Achat' : '📤 Vente'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="text-slate-800 font-medium">{car?.name || 'Voiture supprimée'}</div>
-                          {car?.plate && <div className="text-xs text-slate-400">{car.plate}</div>}
-                        </td>
-                        <td className="px-4 py-3 text-sm">
-                          <span className={`text-xs px-2 py-1 rounded ${
-                            log.regime === 'marge'
-                              ? 'bg-orange-100 text-orange-700'
-                              : 'bg-blue-100 text-blue-700'
-                          }`}>
-                            {log.regime === 'marge' ? 'Marge' : 'Normal'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-right font-semibold text-slate-800">
-                          {log.kind === 'achat' ? '−' : '+'}{eur(Math.round(amount * 100))}
-                        </td>
-                        <td className="px-4 py-3 text-xs text-slate-400">
-                          🔒 Immuable
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Pied de page tableau */}
-            <div className="bg-slate-50 border-t border-slate-200 px-4 py-3 flex justify-end gap-8 font-semibold">
-              <div>
-                Achats: <span className="text-slate-800">{eur(Math.round(totals.buys * 100))}</span>
-              </div>
-              <div>
-                Ventes: <span className="text-slate-800">{eur(Math.round(totals.sells * 100))}</span>
-              </div>
-              <div className={totals.net >= 0 ? 'text-green-600' : 'text-red-600'}>
-                Bilan: {totals.net >= 0 ? '+' : ''}{eur(Math.round(totals.net * 100))}
-              </div>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
-        )}
-
-        {/* Note légale */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-800">
-          <p className="font-semibold mb-1">📋 Informations légales</p>
-          <p>Ce journal est un registre légal immuable (CNIL, Douanes). Aucune modification ou suppression n'est possible après enregistrement. Les données sont horodatées au serveur et cryptées.</p>
         </div>
+      )}
 
-      </div>
+      <p style={{ marginTop: 16, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        🔒 Registre immuable — les entrées ne peuvent pas être supprimées. Obligation légale dès la 1re voiture.
+        Renseigne le vendeur et l'acheteur dans chaque fiche voiture pour compléter les colonnes.
+      </p>
     </div>
   );
 }

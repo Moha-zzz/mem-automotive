@@ -1,190 +1,165 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { fromCents, calculate } from '@/lib/calculations';
+import { useMemo } from 'react';
+import { eur, fmtDate, monthKey, perDay, eurDay } from '@/lib/fmt';
+import { fromCts, carDays, profitHt, profitTtc, IN_STOCK } from '@/lib/car-calc';
 
-function eur(cts: number | null | undefined) {
-  if (!cts) return '—';
-  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(fromCents(cts));
-}
+interface Props { cars: any[]; expenses: any[]; settings: any; }
 
-interface Props {
-  cars: any[];
-  expenses: any[];
-  invoices: any[];
-}
+export default function StatistiquesClient({ cars, expenses, settings }: Props) {
+  const tva  = settings?.tva ?? 20;
+  const cible = settings?.cible ?? 1200;
 
-export default function StatistiquesClient({ cars, expenses, invoices }: Props) {
-  const [period, setPeriod] = useState<'month' | 'quarter' | 'year' | 'all'>('month');
+  const carExps = (id: string) => expenses.filter(e => e.car_id === id);
+  const isSold  = (c: any) => c.stage === 'vendu' && c.sell_date && c.sell_price_cts;
 
-  const now = new Date();
-  const startDate = useMemo(() => {
-    if (period === 'month') return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-    if (period === 'quarter') return new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1).toISOString().slice(0, 10);
-    if (period === 'year') return new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10);
-    return '1970-01-01';
-  }, [period]);
+  const sold = cars.filter(isSold);
+  const bought = cars.filter(c => c.buy_date && c.stage !== 'abandon');
 
-  const stats = useMemo(() => {
-    const sold = cars.filter(c => c.sell_date && c.sell_date >= startDate);
-    const bought = cars.filter(c => c.buy_date && c.buy_date >= startDate);
-    const carExpenses = expenses.filter(e => e.car_id && e.date >= startDate);
+  const margins = sold.map(c => profitHt(c, carExps(c.id), fromCts(c.sell_price_cts), tva) ?? 0);
+  const totalMargin = margins.reduce((s, m) => s + m, 0);
+  const avgMargin = sold.length > 0 ? totalMargin / sold.length : 0;
+  const avgDays = sold.length > 0 ? sold.reduce((s, c) => s + (carDays(c) ?? 0), 0) / sold.length : 0;
+  const totalDays = sold.reduce((s, c) => s + Math.max(1, carDays(c) ?? 0), 0);
+  const avgGainDay = totalDays > 0 ? totalMargin / totalDays : 0;
 
-    const totalRevenue = sold.reduce((s, c) => s + (c.sell_price_cts ?? 0), 0);
-    const totalCost = bought.reduce((s, c) => s + (c.buy_price_cts ?? 0), 0);
-    const totalExpenses = carExpenses.reduce((s, e) => s + (e.ttc_cts ?? 0), 0);
+  // By source
+  const group = (keyFn: (c: any) => string) => {
+    const g: Record<string, any[]> = {};
+    bought.forEach(c => { const k = keyFn(c) || 'Non renseigné'; (g[k] = g[k] ?? []).push(c); });
+    return Object.entries(g).map(([k, cs]) => {
+      const s = cs.filter(isSold);
+      const m = s.map(c => profitHt(c, carExps(c.id), fromCts(c.sell_price_cts), tva) ?? 0);
+      return { k, n: cs.length, sold: s.length, total: m.reduce((a, b) => a + b, 0), avg: s.length ? m.reduce((a, b) => a + b, 0) / s.length : null, days: s.length ? s.reduce((a, c) => a + (carDays(c) ?? 0), 0) / s.length : null };
+    }).sort((a, b) => b.total - a.total);
+  };
 
-    let totalMargin = 0;
-    let marginCount = 0;
-    for (const car of sold) {
-      if (car.buy_price_cts && car.sell_price_cts) {
-        const result = calculate({
-          regime: car.regime,
-          buyPrice: fromCents(car.buy_price_cts),
-          sellPrice: fromCents(car.sell_price_cts),
-          fees: [],
-        });
-        totalMargin += result.profitHt;
-        marginCount++;
-      }
-    }
+  const bySource  = group(c => c.source);
+  const byCountry = group(c => c.country);
+  const maxSrc = Math.max(1, ...bySource.map(r => Math.abs(r.total)));
 
-    const avgDaysStock = bought.length > 0
-      ? bought
-        .map(c => {
-          const d = new Date(c.bought_at ?? c.buy_date);
-          return Math.floor((new Date(c.sell_date ?? now.toISOString().slice(0, 10)).getTime() - d.getTime()) / 86_400_000);
-        })
-        .reduce((a, b) => a + b, 0) / bought.length
-      : 0;
+  // Forecast vs Real
+  const withForecast = sold.filter(c => c.forecast);
 
-    return {
-      sold: sold.length,
-      bought: bought.length,
-      revenue: fromCents(totalRevenue),
-      cost: fromCents(totalCost),
-      expenses: fromCents(totalExpenses),
-      margin: totalMargin,
-      avgMargin: marginCount > 0 ? totalMargin / marginCount : 0,
-      avgDaysStock: Math.round(avgDaysStock),
-    };
-  }, [cars, expenses, startDate]);
+  const KPI = ({ label, value, sub }: any) => (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px' }}>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 3 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--font-barlow-cond)', fontSize: 24, fontWeight: 700 }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
 
-  const marginRate = stats.revenue > 0 ? (stats.margin / stats.revenue) * 100 : 0;
+  const TableSection = ({ title, rows, label }: { title: string; rows: any[]; label: string }) => (
+    <div>
+      <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>{title}</h2>
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: 'var(--surface-2)' }}>
+                {[label, 'Achetées', 'Vendues', 'Bénéfice total', '', 'Bénéfice moyen', 'Jours pour vendre'].map(h => (
+                  <th key={h} style={{ padding: '10px 12px', textAlign: h === label ? 'left' : 'right', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={{ padding: '10px 12px', fontWeight: 600 }}>{r.k}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-barlow-cond)' }}>{r.n}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-barlow-cond)' }}>{r.sold}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-barlow-cond)', fontWeight: 700, color: r.total < 0 ? 'var(--red)' : 'var(--green)' }}>{eur(r.total)}</td>
+                  <td style={{ padding: '10px 12px', width: '15%' }}>
+                    <div style={{ height: 6, background: 'var(--surface-2)', borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', background: r.total < 0 ? 'var(--red)' : 'var(--accent)', borderRadius: 3, width: `${(Math.abs(r.total) / maxSrc * 100).toFixed(0)}%` }} />
+                    </div>
+                  </td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-barlow-cond)' }}>{r.avg !== null ? eur(r.avg) : '—'}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-barlow-cond)' }}>{r.days !== null ? Math.round(r.days) + 'j' : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      {/* Header */}
-      <div className="bg-white border-b border-slate-100 sticky top-0 z-10 px-4 py-3">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-lg font-bold text-slate-800">📊 Statistiques</h1>
-          <p className="text-xs text-slate-400">Analyse de performance</p>
-        </div>
+    <div style={{ padding: '24px clamp(16px,3vw,40px) 60px', maxWidth: 1200, margin: '0 auto' }}>
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.02em' }}>Statistiques</h1>
+        <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '3px 0 0' }}>
+          {bought.length} voiture{bought.length > 1 ? 's' : ''} achetée{bought.length > 1 ? 's' : ''} · {sold.length} vendue{sold.length > 1 ? 's' : ''} · {eur(totalMargin)} de bénéfice
+        </p>
       </div>
 
-      <div className="max-w-4xl mx-auto px-4 py-4 space-y-4">
+      {sold.length > 0 && (
+        <>
+          {/* KPI Row */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+            <KPI label="Bénéfice total HT" value={eur(totalMargin)} sub={`${sold.length} voiture${sold.length > 1 ? 's' : ''} vendues`} />
+            <KPI label="Bénéfice moyen / voiture" value={eur(avgMargin)} sub={`Objectif : ${eur(cible)}`} />
+            <KPI label="Jours moyens pour vendre" value={Math.round(avgDays) + 'j'} />
+            <KPI label="Gain moyen par jour" value={eurDay(avgGainDay)} sub="bénéfice ÷ jours en stock" />
+          </div>
 
-        {/* Période */}
-        <div className="flex gap-2 bg-white p-2 rounded-lg border border-slate-100">
-          {(['month', 'quarter', 'year', 'all'] as const).map(p => (
-            <button key={p} onClick={() => setPeriod(p)}
-              className={['px-3 py-1.5 rounded text-xs font-medium transition-colors',
-                period === p ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'].join(' ')}>
-              {p === 'month' ? 'Mois' : p === 'quarter' ? 'Trimestre' : p === 'year' ? 'Année' : 'Total'}
-            </button>
-          ))}
-        </div>
-
-        {/* KPIs */}
-        <div className="grid md:grid-cols-4 gap-3">
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
-            <p className="text-xs text-slate-400 mb-1">Vendues</p>
-            <p className="text-3xl font-bold text-green-600">{stats.sold}</p>
-            <p className="text-xs text-slate-400 mt-1">Chiffre: {eur(Math.round(stats.revenue * 100))}</p>
-          </div>
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
-            <p className="text-xs text-slate-400 mb-1">Achetées</p>
-            <p className="text-3xl font-bold text-orange-600">{stats.bought}</p>
-            <p className="text-xs text-slate-400 mt-1">Investissement: {eur(Math.round(stats.cost * 100))}</p>
-          </div>
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
-            <p className="text-xs text-slate-400 mb-1">Marge totale</p>
-            <p className="text-3xl font-bold text-blue-600">{eur(Math.round(stats.margin * 100))}</p>
-            <p className="text-xs text-slate-400 mt-1">{marginRate.toFixed(1)} % du CA</p>
-          </div>
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
-            <p className="text-xs text-slate-400 mb-1">Stock moyen</p>
-            <p className="text-3xl font-bold text-slate-800">{stats.avgDaysStock}</p>
-            <p className="text-xs text-slate-400 mt-1">jours en stock</p>
-          </div>
-        </div>
-
-        {/* Détails */}
-        <div className="grid md:grid-cols-2 gap-4">
-          {/* Ventes détail */}
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
-            <h2 className="font-semibold text-slate-700 mb-3">Analyse ventes</h2>
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-600">Nombre</span>
-                <span className="font-medium text-slate-800">{stats.sold} voiture{stats.sold !== 1 ? 's' : ''}</span>
-              </div>
-              <div className="flex justify-between text-sm py-1 border-b border-slate-100">
-                <span className="text-slate-600">Chiffre d'affaires</span>
-                <span className="font-medium text-slate-800">{eur(Math.round(stats.revenue * 100))}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-600">Prix moyen</span>
-                <span className="font-medium text-slate-800">
-                  {stats.sold > 0 ? eur(Math.round((stats.revenue / stats.sold) * 100)) : '—'}
-                </span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-600">Marge moyenne</span>
-                <span className="font-medium text-slate-800">
-                  {eur(Math.round(stats.avgMargin * 100))}
-                </span>
+          {/* Forecast vs Real */}
+          {withForecast.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Prévisionnel vs Réel</h2>
+              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: 'var(--surface-2)' }}>
+                        {['Voiture', 'Marge prévue', 'Marge réelle', 'Écart', 'Jours prévus', 'Jours réels', '€/j prévu', '€/j réel'].map(h => (
+                          <th key={h} style={{ padding: '9px 12px', textAlign: h === 'Voiture' ? 'left' : 'right', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {withForecast.map((c: any) => {
+                        const real = profitHt(c, carExps(c.id), fromCts(c.sell_price_cts), tva) ?? 0;
+                        const plan = parseFloat(c.forecast?.margin ?? '0');
+                        const dd   = Math.max(1, carDays(c) ?? 1);
+                        const dp   = parseFloat(c.forecast?.days ?? '30');
+                        const diff = real - plan;
+                        return (
+                          <tr key={c.id} style={{ borderTop: '1px solid var(--border)' }}>
+                            <td style={{ padding: '10px 12px', fontWeight: 600 }}>{c.name}<br /><span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}>vendue le {fmtDate(c.sell_date)}</span></td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-barlow-cond)' }}>{eur(plan)}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-barlow-cond)', fontWeight: 700 }}>{eur(real)}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-barlow-cond)', fontWeight: 700, color: diff >= 0 ? 'var(--green)' : 'var(--red)' }}>{(diff >= 0 ? '+' : '') + eur(diff)}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-barlow-cond)' }}>{dp}j</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-barlow-cond)', color: dd > dp ? 'var(--red)' : 'var(--text)' }}>{dd}j</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-barlow-cond)' }}>{eurDay(perDay(plan, dp))}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-barlow-cond)', fontWeight: 700, color: perDay(real, dd) >= perDay(plan, dp) ? 'var(--green)' : 'var(--red)' }}>{eurDay(perDay(real, dd))}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
-          {/* Achats détail */}
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
-            <h2 className="font-semibold text-slate-700 mb-3">Analyse achats</h2>
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-600">Nombre</span>
-                <span className="font-medium text-slate-800">{stats.bought} voiture{stats.bought !== 1 ? 's' : ''}</span>
-              </div>
-              <div className="flex justify-between text-sm py-1 border-b border-slate-100">
-                <span className="text-slate-600">Investissement total</span>
-                <span className="font-medium text-slate-800">{eur(Math.round(stats.cost * 100))}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-600">Prix moyen</span>
-                <span className="font-medium text-slate-800">
-                  {stats.bought > 0 ? eur(Math.round((stats.cost / stats.bought) * 100)) : '—'}
-                </span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-600">Dépenses</span>
-                <span className="font-medium text-red-600">{eur(Math.round(stats.expenses * 100))}</span>
-              </div>
-            </div>
+          <div style={{ display: 'grid', gap: 24 }}>
+            <TableSection title="Par site d'achat" rows={bySource} label="Site" />
+            <TableSection title="Par pays" rows={byCountry} label="Pays" />
           </div>
-        </div>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>
+            Renseigne le site d'achat et le pays dans chaque fiche voiture pour des statistiques fiables.
+          </p>
+        </>
+      )}
 
-        {/* Indicateurs clés */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-800">
-          <h3 className="font-semibold mb-2">💡 Indicateurs clés</h3>
-          <ul className="space-y-1 text-sm">
-            <li><span className="font-medium">ROI</span> : {stats.revenue > 0 ? ((stats.margin / stats.cost) * 100).toFixed(1) : '—'} %</li>
-            <li><span className="font-medium">Taux marge</span> : {marginRate.toFixed(1)} %</li>
-            <li><span className="font-medium">Vélocité</span> : {stats.bought > 0 ? ((stats.sold / stats.bought) * 100).toFixed(0) : '—'} % vendues</li>
-            <li><span className="font-medium">Rotation stock</span> : {stats.avgDaysStock} jours en moyenne</li>
-          </ul>
+      {sold.length === 0 && (
+        <div style={{ padding: '48px', textAlign: 'center', border: '1px dashed var(--border)', borderRadius: 12, color: 'var(--text-muted)', fontSize: 13 }}>
+          Les statistiques apparaissent dès que tes voitures ont une date d'achat et de vente.
         </div>
-      </div>
+      )}
     </div>
   );
 }

@@ -1,36 +1,30 @@
 import { createClient } from '@/lib/supabase/server';
 import AccueilClient from './AccueilClient';
 
+export const dynamic = 'force-dynamic';
+
 export default async function AccueilPage() {
   const sb = await createClient();
-
   const [
-    { data: cars },
-    { data: expenses },
-    { data: deals },
-    { data: invoices },
-    { data: settings },
-    { data: moves },
-    { data: cashFlows },
+    { data: cars }, { data: expenses }, { data: invoices },
+    { data: settings }, { data: tasks },
   ] = await Promise.all([
-    sb.from('cars').select('id,name,stage,buy_price_cts,sell_price_cts,buy_date,sell_date,bought_at,sold_at,regime').order('created_at', { ascending: false }),
-    sb.from('expenses').select('*').gte('date', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10)),
-    sb.from('deals').select('*').order('created_at', { ascending: false }).limit(10),
-    sb.from('invoices').select('*').gte('date', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10)),
+    sb.from('cars').select('id,name,stage,buy_price_cts,sell_price_cts,buy_date,sell_date,bought_at,regime'),
+    sb.from('expenses').select('*'),
+    sb.from('invoices').select('id,locked_at,paid,type'),
     sb.from('settings').select('*').eq('id', 'main').single(),
-    sb.from('moves').select('*').order('date', { ascending: false }).limit(10),
-    sb.from('cash').select('*').order('date', { ascending: true }),
+    sb.from('tasks').select('*').eq('done', false).order('due'),
   ]);
+
+  const s = settings ?? {};
+  const openBalance  = (s.solde_cts ?? 0) / 100;
+  const cashBalance  = (s.cash_solde_cts ?? 0) / 100;
 
   return (
     <AccueilClient
-      cars={cars ?? []}
-      expenses={expenses ?? []}
-      deals={deals ?? []}
-      invoices={invoices ?? []}
-      settings={settings ?? {}}
-      moves={moves ?? []}
-      cashFlows={cashFlows ?? []}
+      cars={cars ?? []} expenses={expenses ?? []} deals={[]}
+      invoices={invoices ?? []} settings={s} moves={[]} cashFlows={[]}
+      tasks={tasks ?? []} openBalance={openBalance} cashBalance={cashBalance}
     />
   );
 }
