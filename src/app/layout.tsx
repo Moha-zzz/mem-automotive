@@ -1,13 +1,18 @@
 import type { Metadata, Viewport } from 'next';
-import { Inter, Barlow_Condensed } from 'next/font/google';
+import { Barlow, Barlow_Condensed } from 'next/font/google';
 import './globals.css';
 import Navigation from '@/components/Navigation';
 
-const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
-const barlow = Barlow_Condensed({
+const barlow = Barlow({
   subsets: ['latin'],
   weight: ['400', '500', '600', '700'],
   variable: '--font-barlow',
+});
+
+const barlowCondensed = Barlow_Condensed({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-barlow-cond',
 });
 
 export const metadata: Metadata = {
@@ -18,16 +23,22 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#1e3a5f',
+  themeColor: '#0F1B3D',
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="fr" className={`${inter.variable} ${barlow.variable} h-full`}>
-      <body className="min-h-full bg-slate-50 text-slate-900 antialiased">
+    <html lang="fr" className={`${barlow.variable} ${barlowCondensed.variable} h-full`}>
+      <head>
+        <link rel="apple-touch-icon" href="/apple-touch-icon-180.png" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+      </head>
+      <body>
         <Navigation />
         {children}
       </body>

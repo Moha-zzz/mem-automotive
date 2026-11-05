@@ -1,23 +1,42 @@
 'use client';
 
 import { useMemo } from 'react';
-import { useRouter } from 'next/navigation';
-import { motion } from 'framer-motion';
+import Link from 'next/link';
 import { fromCents, calculate } from '@/lib/calculations';
-import { computeBankBalance, computeCashBalance, computeTvaPeriod, currentMonthRange } from '@/lib/argent';
 
-function eur(cts: number | null | undefined) {
-  if (!cts) return '—';
-  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(fromCents(cts));
+function eur(cts: number | null | undefined, decimals = 0) {
+  if (cts == null || cts === 0) return '—';
+  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: decimals }).format(fromCents(cts));
+}
+
+function today() {
+  return new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+}
+
+function greeting() {
+  const h = new Date().getHours();
+  return h < 5 ? 'Bonne nuit' : h < 18 ? 'Bonjour' : 'Bonsoir';
 }
 
 const STAGES = [
-  { key: 'repere', label: 'Repéré', color: 'from-slate-500 to-slate-600', icon: '👁️' },
-  { key: 'achete', label: 'Acheté', color: 'from-orange-500 to-red-500', icon: '💳' },
-  { key: 'preparation', label: 'Préparation', color: 'from-blue-500 to-cyan-500', icon: '🔧' },
-  { key: 'vente', label: 'En vente', color: 'from-amber-500 to-yellow-500', icon: '📢' },
-  { key: 'reserve', label: 'Réservé', color: 'from-green-500 to-emerald-500', icon: '🎯' },
-  { key: 'vendu', label: 'Vendu', color: 'from-purple-500 to-pink-500', icon: '✨' },
+  { key: 'repere',      label: 'Repérées',     color: '#8B95A1' },
+  { key: 'achete',      label: 'Achetées',     color: '#E07B06' },
+  { key: 'preparation', label: 'Préparation',  color: '#C45E0A' },
+  { key: 'vente',       label: 'En vente',     color: '#1F8A4C' },
+  { key: 'reserve',     label: 'Réservées',    color: '#8A4FC4' },
+  { key: 'vendu',       label: 'Vendues',      color: '#14532D' },
+];
+
+const QUICK_LINKS = [
+  { href: '/voitures',          label: 'Voitures',         icon: '◫' },
+  { href: '/calculer',          label: 'Calculer',         icon: '€' },
+  { href: '/argent',            label: 'Argent',           icon: '₿' },
+  { href: '/factures',          label: 'Factures',         icon: '≡' },
+  { href: '/taches',            label: 'Tâches',           icon: '✓' },
+  { href: '/calendrier',        label: 'Agenda',           icon: '▦' },
+  { href: '/police',            label: 'Police',           icon: '⊞' },
+  { href: '/statistiques',      label: 'Stats',            icon: '↗' },
+  { href: '/cap-et-objectifs',  label: 'Cap & Objectifs',  icon: '◎' },
 ];
 
 interface Props {
@@ -30,260 +49,239 @@ interface Props {
   cashFlows: any[];
 }
 
-export default function AccueilClient({ cars, expenses, deals, invoices, settings, moves, cashFlows }: Props) {
-  const router = useRouter();
+export default function AccueilClient({ cars, expenses, invoices, settings }: Props) {
+  const now = useMemo(() => {
+    const d = new Date();
+    return { month: d.getMonth(), year: d.getFullYear() };
+  }, []);
 
-  const carStats = useMemo(() => {
-    const inStock = cars.filter(c => ['achete', 'preparation', 'vente', 'reserve'].includes(c.stage)).length;
-    const soldMonth = cars.filter(c => c.sell_date && c.sell_date >= new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10)).length;
-    const avgStockDays = cars
-      .filter(c => c.bought_at)
-      .map(c => {
-        const d = new Date(c.bought_at);
-        return Math.floor((Date.now() - d.getTime()) / 86_400_000);
-      })
-      .reduce((a, b) => a + b, 0) / Math.max(cars.filter(c => c.bought_at).length, 1);
+  const monthStart = `${now.year}-${String(now.month + 1).padStart(2, '0')}-01`;
 
-    return { total: cars.length, inStock, soldMonth, avgStockDays: Math.round(avgStockDays) };
-  }, [cars]);
+  // KPIs
+  const inStock = useMemo(() =>
+    cars.filter(c => ['achete', 'preparation', 'vente', 'reserve'].includes(c.stage)).length, [cars]);
 
-  const stageDistribution = useMemo(() => {
-    return STAGES.map(s => ({
-      ...s,
-      count: cars.filter(c => c.stage === s.key).length,
-    }));
-  }, [cars]);
-
-  const balances = useMemo(() => {
-    const bank = computeBankBalance(settings, expenses, cars, moves, cashFlows);
-    const cash = computeCashBalance(settings, expenses, cars, moves);
-    return { bank, cash, total: bank + cash };
-  }, [settings, expenses, cars, moves, cashFlows]);
-
-  const [mStart, mEnd] = currentMonthRange();
-  const tvaMois = useMemo(() => computeTvaPeriod(cars, expenses, mStart, mEnd), [cars, expenses, mStart, mEnd]);
-
-  const monthExpenses = useMemo(() => {
-    return expenses
-      .filter(e => e.date >= mStart && e.date <= mEnd)
-      .reduce((s, e) => s + (e.ttc_cts ?? 0), 0);
-  }, [expenses, mStart, mEnd]);
+  const soldMonth = useMemo(() =>
+    cars.filter(c => c.sell_date && c.sell_date >= monthStart), [cars, monthStart]);
 
   const marginMonth = useMemo(() => {
-    const sold = cars.filter(c => c.sell_date && c.sell_date >= mStart && c.sell_date <= mEnd);
-    if (sold.length === 0) return 0;
-    return sold.reduce((sum, c) => {
+    return soldMonth.reduce((sum, c) => {
       if (!c.buy_price_cts || !c.sell_price_cts) return sum;
-      const result = calculate({
-        regime: c.regime,
-        buyPrice: fromCents(c.buy_price_cts),
-        sellPrice: fromCents(c.sell_price_cts),
-        fees: [],
-      });
-      return sum + result.profitHt;
+      const r = calculate({ regime: c.regime ?? 'marge', buyPrice: fromCents(c.buy_price_cts), sellPrice: fromCents(c.sell_price_cts), fees: [] });
+      return sum + r.profitHt;
     }, 0);
-  }, [cars, mStart, mEnd]);
+  }, [soldMonth]);
 
-  const dealsOpen = useMemo(() => {
-    return deals.filter(d => !d.sold_at).slice(0, 5);
-  }, [deals]);
+  const stockValue = useMemo(() =>
+    cars.filter(c => ['achete', 'preparation', 'vente', 'reserve'].includes(c.stage))
+        .reduce((s, c) => s + (c.buy_price_cts ?? 0), 0), [cars]);
 
-  const invoicesUnpaid = useMemo(() => {
-    return invoices.filter(i => i.locked_at && !i.paid && i.type !== 'bon').length;
-  }, [invoices]);
+  const bankBalance = settings?.solde_cts ?? 0;
 
-  const totalUnpaid = useMemo(() => {
-    return invoices
-      .filter(i => i.locked_at && !i.paid && i.type !== 'bon')
-      .reduce((s, i) => s + (i.total_cts ?? 0), 0);
-  }, [invoices]);
+  const unpaidInvoices = useMemo(() =>
+    invoices.filter(i => i.locked_at && !i.paid && i.type !== 'bon'), [invoices]);
 
-  const menuLinks = [
-    { href: '/voitures', icon: '🚗', label: 'Voitures' },
-    { href: '/calculer', icon: '🧮', label: 'Calculer' },
-    { href: '/argent', icon: '💰', label: 'Argent' },
-    { href: '/factures', icon: '🧾', label: 'Factures' },
-    { href: '/police', icon: '📋', label: 'Police' },
-    { href: '/taches', icon: '✅', label: 'Tâches' },
-    { href: '/calendrier', icon: '📅', label: 'Calendrier' },
-    { href: '/statistiques', icon: '📊', label: 'Stats' },
-  ];
+  const monthExpenses = useMemo(() =>
+    expenses.reduce((s, e) => s + (e.ttc_cts ?? 0), 0), [expenses]);
+
+  // Stage distribution
+  const stageCount = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const c of cars) m[c.stage] = (m[c.stage] ?? 0) + 1;
+    return m;
+  }, [cars]);
+
+  // Gauge (cars sold vs target 6)
+  const target = 6;
+  const ratio = Math.min(soldMonth.length / target, 1);
+  const arcLen = 282; // circumference ≈ π * r * ratio
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-      {/* Hero Section */}
-      <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 relative overflow-hidden px-4 py-12 md:py-16">
-        <div className="absolute inset-0 opacity-20">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0.1),transparent)]"></div>
-        </div>
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-          className="max-w-6xl mx-auto relative z-10"
-        >
-          <h1 className="text-4xl md:text-5xl font-bold text-white mb-2">
-            📊 MEM AUTOMOTIVE
-          </h1>
-          <p className="text-lg text-blue-50 max-w-2xl">
-            Gestion d'inventaire, calcul TVA et facturation — tout en un.
-          </p>
-        </motion.div>
-      </div>
+    <div className="app-shell" style={{ display: 'contents' }}>
+      <div style={{ padding: '28px clamp(16px, 3vw, 40px) 60px', minWidth: 0 }}>
 
-      <div className="max-w-6xl mx-auto px-4 py-8 space-y-8">
+        {/* Hero */}
+        <section style={{
+          display: 'grid', gridTemplateColumns: '1.35fr 1fr', gap: 28,
+          background: 'var(--navy)', color: '#fff',
+          borderRadius: 20, padding: '28px 30px', marginBottom: 20,
+          position: 'relative', overflow: 'hidden',
+        }}>
+          {/* Decorative circle */}
+          <div style={{
+            position: 'absolute', right: -60, bottom: -120,
+            width: 420, height: 420, borderRadius: '50%',
+            border: '1px solid rgba(255,255,255,0.06)', pointerEvents: 'none',
+          }} />
 
-        {/* KPIs Cards */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.1 }}
-          className="grid grid-cols-1 md:grid-cols-4 gap-4"
-        >
-          {[
-            { title: 'Total voitures', value: carStats.total, icon: '🚗', color: 'from-orange-500 to-red-500', href: '/voitures' },
-            { title: 'Solde banque', value: eur(Math.round(balances.bank * 100)), icon: '💳', color: 'from-green-500 to-emerald-500', href: '/argent' },
-            { title: 'Vendues (mois)', value: carStats.soldMonth, icon: '📤', color: 'from-purple-500 to-pink-500', href: '/voitures', sub: `Marge: ${eur(Math.round(marginMonth * 100))}` },
-            { title: 'Factures', value: invoices.length, icon: '📋', color: 'from-amber-500 to-yellow-500', href: '/factures', sub: invoicesUnpaid > 0 ? `${invoicesUnpaid} non payées` : '✅ À jour' },
-          ].map((kpi, i) => (
-            <motion.button
-              key={i}
-              whileHover={{ scale: 1.05, translateY: -5 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={() => router.push(kpi.href)}
-              className={`bg-gradient-to-br ${kpi.color} rounded-2xl p-6 text-white shadow-xl hover:shadow-2xl transition-all cursor-pointer border border-white/10`}
-            >
-              <div className="flex items-start justify-between mb-3">
-                <span className="text-3xl">{kpi.icon}</span>
-                <span className="text-xs bg-white/20 px-2 py-1 rounded-full">En direct</span>
-              </div>
-              <p className="text-sm text-white/80 mb-1">{kpi.title}</p>
-              <p className="text-3xl font-bold">{kpi.value}</p>
-              {kpi.sub && <p className="text-xs text-white/60 mt-2">{kpi.sub}</p>}
-            </motion.button>
-          ))}
-        </motion.div>
+          {/* Left */}
+          <div style={{ position: 'relative' }}>
+            <p style={{ margin: 0, color: '#AEB9D6', fontSize: 14, fontWeight: 500, textTransform: 'capitalize' }}>
+              {today()}
+            </p>
+            <h1 style={{ fontSize: 44, color: '#fff', margin: '4px 0 20px' }}>
+              {greeting()}
+            </h1>
 
-        {/* Distribution Stock */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.2 }}
-          className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-8 border border-slate-700 shadow-xl"
-        >
-          <h2 className="text-lg font-bold text-white mb-6">Distribution stock</h2>
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-            {stageDistribution.map((stage, i) => (
-              <motion.div
-                key={stage.key}
-                whileHover={{ scale: 1.05 }}
-                className={`bg-gradient-to-br ${stage.color} rounded-xl p-4 text-white text-center shadow-lg border border-white/10`}
-              >
-                <div className="text-2xl mb-2">{stage.icon}</div>
-                <div className="text-2xl font-bold">{stage.count}</div>
-                <p className="text-xs text-white/80 mt-2">{stage.label}</p>
-              </motion.div>
-            ))}
-          </div>
-        </motion.div>
-
-        {/* Finances + Affaires */}
-        <div className="grid md:grid-cols-2 gap-6">
-          {/* Finances */}
-          <motion.div
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.6, delay: 0.3 }}
-            className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-8 border border-slate-700 shadow-xl"
-          >
-            <h2 className="text-lg font-bold text-white mb-6">Finances (ce mois)</h2>
-            <div className="space-y-4">
+            {/* Stats */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
               {[
-                { label: 'Dépenses', value: eur(Math.round(monthExpenses)), color: 'text-red-400' },
-                { label: 'TVA collectée', value: eur(Math.round(tvaMois.collectee * 100)), color: 'text-amber-400' },
-                { label: 'TVA déductible', value: eur(Math.round(tvaMois.deductible * 100)), color: 'text-green-400' },
-              ].map((item, i) => (
-                <div key={i} className="flex justify-between items-center pb-3 border-b border-slate-700/50">
-                  <span className="text-slate-300">{item.label}</span>
-                  <span className={`font-semibold ${item.color}`}>{item.value}</span>
+                { label: 'Sur le compte', value: eur(bankBalance), sub: `${eur(stockValue)} en stock` },
+                { label: 'Vendues ce mois', value: String(soldMonth.length), sub: `Marge : ${eur(Math.round(marginMonth * 100))}` },
+                { label: 'En stock', value: String(inStock), sub: `${cars.length} voiture(s) au total` },
+              ].map((s, i) => (
+                <div key={i} style={{
+                  background: 'rgba(255,255,255,0.06)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: 13, padding: '12px 14px',
+                }}>
+                  <span style={{ display: 'block', fontSize: 12, color: '#AEB9D6', fontWeight: 600, marginBottom: 2 }}>{s.label}</span>
+                  <b style={{ display: 'block', fontFamily: 'var(--font-barlow-cond, sans-serif)', fontSize: 26, fontWeight: 700, lineHeight: 1.1 }}>{s.value}</b>
+                  <small style={{ display: 'block', fontSize: 11.5, color: '#8F9BBB', marginTop: 3 }}>{s.sub}</small>
                 </div>
               ))}
             </div>
-          </motion.div>
 
-          {/* Affaires */}
-          <motion.div
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.6, delay: 0.3 }}
-            className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-8 border border-slate-700 shadow-xl"
-          >
-            <h2 className="text-lg font-bold text-white mb-6">Affaires en cours</h2>
-            {dealsOpen.length === 0 ? (
-              <p className="text-slate-400 text-center py-8">Aucune affaire en cours</p>
-            ) : (
-              <div className="space-y-3">
-                {dealsOpen.map((deal, i) => (
-                  <motion.div
-                    key={deal.id}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.1 }}
-                    className="p-3 bg-slate-700/50 rounded-lg border border-slate-600/50 hover:border-blue-500/50 transition-colors cursor-pointer"
-                  >
-                    <p className="text-sm font-medium text-white">{deal.name || 'Affaire'}</p>
-                    <p className="text-xs text-slate-400 mt-1">
-                      {deal.fc?.buy ? eur(Math.round(deal.fc.buy * 100)) : '—'} → {deal.fc?.sell ? eur(Math.round(deal.fc.sell * 100)) : '—'}
-                    </p>
-                  </motion.div>
-                ))}
+            {/* Actions */}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 18 }}>
+              <Link href="/voitures" style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '9px 14px', borderRadius: 10,
+                background: '#F2A20C', borderColor: '#F2A20C', color: '#1a1a1a',
+                fontWeight: 700, fontSize: 14, textDecoration: 'none',
+              }}>+ Voiture</Link>
+              <Link href="/calculer" style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '9px 14px', borderRadius: 10,
+                background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)', color: '#fff',
+                fontWeight: 600, fontSize: 14, textDecoration: 'none',
+              }}>€ Calculer</Link>
+              <Link href="/argent" style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '9px 14px', borderRadius: 10,
+                background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)', color: '#fff',
+                fontWeight: 600, fontSize: 14, textDecoration: 'none',
+              }}>₿ Argent</Link>
+            </div>
+          </div>
+
+          {/* Right — Gauge */}
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            textAlign: 'center', borderLeft: '1px solid rgba(255,255,255,0.08)', paddingLeft: 24,
+          }}>
+            <svg viewBox="0 0 220 130" style={{ width: '100%', maxWidth: 260 }} role="img" aria-label={`${soldMonth.length} voitures vendues sur ${target}`}>
+              <path d="M20 115 A90 90 0 0 1 200 115" fill="none" stroke="rgba(255,255,255,.14)" strokeWidth="14" strokeLinecap="round" />
+              {ratio > 0 && (
+                <path d="M20 115 A90 90 0 0 1 200 115" fill="none"
+                  stroke={ratio >= 1 ? '#4CC37F' : '#F2A20C'} strokeWidth="14" strokeLinecap="round"
+                  strokeDasharray={`${(ratio * arcLen).toFixed(1)} ${arcLen}`} />
+              )}
+            </svg>
+            <div style={{ fontFamily: 'var(--font-barlow-cond, sans-serif)', fontSize: 56, fontWeight: 700, marginTop: -86, color: '#fff', lineHeight: 1 }}>
+              {soldMonth.length}<span style={{ fontSize: 28, color: '#8F9BBB' }}> / {target}</span>
+            </div>
+            <p style={{ color: '#AEB9D6', fontSize: 14, margin: '6px 0 0' }}>
+              voitures vendues ce mois
+            </p>
+
+            {/* Progress bar */}
+            <div style={{ width: '100%', maxWidth: 280, marginTop: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#AEB9D6', marginBottom: 6 }}>
+                <span>Bénéfice</span>
+                <b style={{ color: '#fff', fontFamily: 'var(--font-barlow-cond, sans-serif)' }}>
+                  {eur(Math.round(marginMonth * 100))}
+                </b>
               </div>
-            )}
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              onClick={() => router.push('/calculer')}
-              className="w-full mt-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg font-medium hover:shadow-lg transition-shadow"
-            >
-              + Nouvelle affaire
-            </motion.button>
-          </motion.div>
+              <div style={{ height: 8, background: 'rgba(255,255,255,0.1)', borderRadius: 6, overflow: 'hidden' }}>
+                <div style={{ height: '100%', background: '#F2A20C', borderRadius: 6, width: `${Math.min(100, (marginMonth / 10000) * 100)}%`, transition: 'width 0.6s ease' }} />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Pipeline */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
+          {STAGES.map(s => (
+            <Link key={s.key} href={`/voitures?stage=${s.key}`} style={{ textDecoration: 'none', flex: '1 1 90px' }}>
+              <div style={{
+                background: 'var(--surface)', border: '1px solid var(--line)',
+                borderBottom: `3px solid ${s.color}`,
+                borderRadius: 11, padding: '12px 14px',
+                boxShadow: 'var(--shadow)', transition: 'transform 0.15s',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.transform = 'translateY(-2px)')}
+              onMouseLeave={e => (e.currentTarget.style.transform = '')}>
+                <b style={{ display: 'block', fontFamily: 'var(--font-barlow-cond, sans-serif)', fontSize: 28, fontWeight: 700, color: 'var(--text)' }}>
+                  {stageCount[s.key] ?? 0}
+                </b>
+                <span style={{ fontSize: 12, color: 'var(--muted)' }}>{s.label}</span>
+              </div>
+            </Link>
+          ))}
         </div>
 
-        {/* Navigation rapide */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.4 }}
-          className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-8 border border-slate-700 shadow-xl"
-        >
-          <h2 className="text-lg font-bold text-white mb-6">Accès rapide</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {menuLinks.map((link, i) => (
-              <motion.button
-                key={link.href}
-                whileHover={{ scale: 1.05, translateY: -2 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => router.push(link.href)}
-                className="p-4 rounded-xl bg-slate-700/50 hover:bg-slate-600 border border-slate-600/50 hover:border-blue-500/50 transition-all text-center group"
-              >
-                <p className="text-2xl mb-2 group-hover:scale-125 transition-transform">{link.icon}</p>
-                <p className="text-xs font-medium text-white">{link.label}</p>
-              </motion.button>
-            ))}
+        {/* Two-column grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
+          {/* Finances */}
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--radius)', padding: '18px 20px', boxShadow: 'var(--shadow)' }}>
+            <h2 style={{ fontSize: 18, marginBottom: 14 }}>Finances (ce mois)</h2>
+            <div>
+              {[
+                { label: 'Dépenses',         value: eur(monthExpenses),                     color: 'var(--red)' },
+                { label: 'Factures en attente', value: String(unpaidInvoices.length),        color: unpaidInvoices.length > 0 ? 'var(--amber)' : 'var(--green)' },
+                { label: 'Stock engagé',     value: eur(stockValue),                         color: 'var(--muted)' },
+              ].map((row, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '9px 0', borderBottom: i < 2 ? '1px solid var(--line)' : 'none' }}>
+                  <span style={{ fontSize: 14, color: 'var(--muted)' }}>{row.label}</span>
+                  <b style={{ fontFamily: 'var(--font-barlow-cond, sans-serif)', fontSize: 20, color: row.color }}>{row.value}</b>
+                </div>
+              ))}
+            </div>
           </div>
-        </motion.div>
 
-        {/* Info */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.6, delay: 0.5 }}
-          className="bg-gradient-to-r from-blue-500/20 to-purple-500/20 border border-blue-500/30 rounded-2xl p-6 text-center"
-        >
-          <p className="text-sm text-slate-300">
-            <span className="font-semibold text-blue-400">💡 Conseil :</span> Commence par créer une affaire dans Calculer, puis émettre une facture.
-          </p>
-        </motion.div>
+          {/* Quick nav */}
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 'var(--radius)', padding: '18px 20px', boxShadow: 'var(--shadow)' }}>
+            <h2 style={{ fontSize: 18, marginBottom: 14 }}>Accès rapide</h2>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+              {QUICK_LINKS.map(link => (
+                <Link key={link.href} href={link.href} style={{ textDecoration: 'none' }}>
+                  <div style={{
+                    display: 'grid', justifyItems: 'center', gap: 4,
+                    padding: '10px 6px', borderRadius: 10,
+                    border: '1px solid var(--line)', background: 'var(--surface-2)',
+                    cursor: 'pointer', transition: 'border-color 0.15s, background 0.15s',
+                    fontSize: 12, fontWeight: 600, color: 'var(--text)',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--blue)'; e.currentTarget.style.background = 'var(--blue-soft)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--line)'; e.currentTarget.style.background = 'var(--surface-2)'; }}>
+                    <span style={{ fontSize: 20 }}>{link.icon}</span>
+                    {link.label}
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Invoices alert */}
+        {unpaidInvoices.length > 0 && (
+          <div style={{
+            background: 'var(--amber-soft)', borderRadius: 12, padding: '12px 16px',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+            marginBottom: 16, border: '1px solid rgba(242,162,12,0.3)',
+          }}>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>
+              {unpaidInvoices.length} facture{unpaidInvoices.length > 1 ? 's' : ''} non payée{unpaidInvoices.length > 1 ? 's' : ''}
+            </span>
+            <Link href="/factures" style={{
+              padding: '6px 12px', borderRadius: 8, background: 'var(--amber)',
+              color: '#1a1a1a', fontWeight: 700, fontSize: 13, textDecoration: 'none',
+            }}>Voir les factures</Link>
+          </div>
+        )}
+
       </div>
     </div>
   );
